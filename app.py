@@ -1,13 +1,22 @@
-from flask import Flask, request, jsonify
+from flask import Flask,jsonify,redirect,render_template,request,Response,session,url_for
 from flask_cors import CORS, cross_origin   # pip install -U flask-cors
+from flask_session import Session
 import json
 import logging
 import numpy as np
+from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.dimensions import ColumnDimension, DimensionHolder
+from openpyxl.writer.excel import save_virtual_workbook
 import pandas as pd
 
 # https://www.imdb.com/interfaces/
 # https://medium.com/analytics-vidhya/exploratory-data-analysis-imdb-dataset-cff0c3991ad5
 
+# https://roytuts.com/autocomplete-input-suggestion-using-python-and-flask/
+# https://www.geeksforgeeks.org/autocomplete-input-suggestion-using-python-and-flask/
+
+max_rows=30       # Max number of movies returned
 min_rating=5.0
 min_votes=1000
 
@@ -17,10 +26,9 @@ df_names=None
 
 #
 # Logging
-# https://flask.palletsprojects.com/en/2.0.x/logging/
 #
 logging.basicConfig(
-  filename='tmdb.log', 
+  filename='MoviesSearch.log', 
   # encoding='utf-8', 
   format='%(asctime)s %(levelname)s:%(message)s', 
   level=logging.DEBUG
@@ -28,101 +36,133 @@ logging.basicConfig(
 
 app = Flask(__name__)
 
+#
+# Cross Origin to be able to call the API from another machine or port
+#
 cors = CORS(app)
 app.config['CORS_HEADERS'] = 'Content-Type'
-    
-params=""
+
+# Use Flask server session to avoid a "Confirm Form Resubmission" pop-up:
+# Redirect and pass form values from post to get method
+app.config['SECRET_KEY'] = "your_secret_key" 
+app.config['SESSION_TYPE'] = 'filesystem' 
+app.config['SESSION_PERMANENT']= False
+app.config.from_object(__name__)
+Session(app)
 
 @app.route('/', methods=['GET','POST'])
 @cross_origin()
 def slash():
-    print(f"slash - got request: {request.method}")
-    if request.method == 'GET':
-        print(f"GET - Params: {params}")
-        api_urls={
-            'list': '[GET]  /',
-            'run':  '[POST] /',
-        }
-        # jsonify accepts a dict or a list
-        return jsonify(api_urls)
-
-    elif request.method == 'POST':
-        print(f"POST - params: {params}")
-        # data = json.loads(request.data)
-        # print("Data:")
-        # print(data)
-        resp={'message': "Processed"}
-        return jsonify(resp)
+  print(f"slash - got request: {request.method}")
+  
+  # The 'extract' button was pressed
+  if 'extract' in request.form:
+    logging.debug("request.form:")
+    logging.debug(request.form)
+    results=movies(request.form).to_dict('records')
+    logging.debug("MoviesSearch - Extracted results:")
+    logging.debug(results)
+  
+  # Download Option
+  elif 'download' in request.form and 'results' in session:
+  
+    # Create a workbook
+    wb = Workbook()
+    
+    # Assign the sheets
+    ws = wb.active
+    ws.title = "Movies"
+    print(ws.title)
+    
+    # Get the data
+    j=session['results']
+    if j:
+      # results=json.loads(session['results'])
+      results=session['results']
     else:
-        print("Post error 405 - Not allowed")
-        resp={'Method not allowed': request.method}
-        return jsonify(resp)
+      results=[]
+    
+    # Set the sheets
+    set_sheet(results,ws)
+    
+    return Response(
+      save_virtual_workbook(wb),
+      headers={
+        'Content-Disposition': 'attachment; filename=MoviesSearch.xlsx',
+        'Content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      }
+    ) 
+  # download
+    
+  # Redirect
+  if request.method=='POST':
+    logging.debug("MoviesSearch - branch: redirect")
+    # for result in results:
+    #   print(f"results 3 - k:{result['title']} {result['year']}")
+    # session['results'] = json.dumps(results)
+    session['results'] = results
+    return redirect(url_for('slash'))
+
+  # Render
+  else:
+    logging.debug("MoviesSearch - branch: render index.html")
+    if 'results' in session:
+      j=session['results']
+      if j:
+        # results=json.loads(session['results'])
+        results=session['results']
+      else:
+        results=[]
+    else:
+      results=[]
+    logging.debug("MoviesSearch - Rendered results:")
+    logging.debug(results)
+
+    return render_template("index.html",results=results)
 # slash()
 
-@app.route('/find_name', methods=['POST'])
+@app.route('/find_names', methods=['GET'])
 @cross_origin()
-def find_name():
-    print(f"find_name - got request: {request.method}")
-    if request.method == 'POST':
-        logging.debug(f"params: {params}")
-        logging.debug("request:")
-        logging.debug(request)
-        logging.debug("request.data:")
-        logging.debug(request.data)
-        search=json.loads(request.data)
-        logging.debug("search: "+search)
-        # search = json.loads(request.data)
-        # search="Marie";
-        logging.debug(f"Search: {search} - DFs: Names: {df_names.size} Principals: {df_principals} Movies: {df_ratings_titles}")
-        df=search_name(search,10)
-        js=df.to_json(orient='records')
-        logging.debug(f"json:{js}")
-        resp={'message': "Processed"}
-        return js
-        # return jsonify(resp)
+def find_names():
+    # print(f"find_names - got request: {request.method}")
+    search = request.args.get('q')
+    # logging.debug(f"find_names - search: {search}")
+    df=df_names[df_names.primaryName.str.contains(search,na=False, case=False)]
+    df=df.assign(display=df.primaryName+' ('+df.birthYear+')')
+    return df.to_json(orient='records')
+# find_names()
+
+def movies(params):
+    genre=""
+    if "genre" in params.keys():
+      genre=params['genre']
+    nconst1=""
+    if "name" in params.keys():
+      nconst1=params['name']
+    nconst2=""
+    if "name2" in params.keys():
+      nconst2=params['name2']
+    if "rating" in params.keys() and params['rating'].isdigit():
+      rating=float(d['rating'])
     else:
-        logging.debug("Post error 405 - Not allowed")
-        resp={'Method not allowed': request.method}
-        return jsonify(resp)
-# find_name()
+      rating=0
+    title='title'
+    if "votes" in params.keys() and params['votes'].isdigit():
+      votes=int(params['votes'])
+    else:
+      votes=0
+    if "yearEnd" in params.keys() and params['yearEnd'].isdigit():
+      year_end=int(params['yearEnd'])
+    else:
+      year_end=99999
+    if "yearStart" in params.keys() and params['yearStart'].isdigit():
+      year_start=int(params['yearStart'])
+    else:
+      year_start=0
+      
+    logging.debug(f"movies - g:{genre} c1:{nconst1} c2:{nconst2} r:{rating} v:{votes} e:{year_end} s:{year_start}")
 
-@app.route('/movies', methods=['POST'])
-@cross_origin()
-def movies():
-    print(f"movies - got request: {request.method}")
-    if request.method == 'POST':
-        logging.debug(f"params: {params}")
-        logging.debug("request:")
-        logging.debug(request)
-        logging.debug("request.data:")
-        logging.debug(request.data)
-        d=json.loads(request.data)
-        logging.debug("d:")
-        logging.debug(d)
-        logging.debug(d['name1'])
-        
-        genre=d['genre']
-        nconst1=d['name1']
-        nconst2=d['name2']
-        if d['rating'].isdigit():
-          rating=float(d['rating'])
-        else:
-          rating=0
-        title='title'
-        if d['votes'].isdigit():
-          votes=int(d['votes'])
-        else:
-          votes=0
-        if d['yearEnd'].isdigit():
-          year_end=int(d['yearEnd'])
-        else:
-          year_end=9000
-        if d['yearStart'].isdigit():
-          year_start=int(d['yearStart'])
-        else:
-          year_start=0
-
-        df=find_titles(
+    df=find_titles(
             genre,
             nconst1,
             nconst2,
@@ -131,43 +171,15 @@ def movies():
             votes,
             year_end,
             year_start
-        )
-        logging.debug("To json")
-        js=df.to_json(orient='records')
-        logging.debug("json")
-        # logging.debug(js)
-        # resp={'message': "Processed"}
-        return js
-        # return jsonify(resp)
-    else:
-        logging.debug("Post error 405 - Not allowed")
-        resp={'Method not allowed': request.method}
-        return jsonify(resp)
+    )
+    # logging.debug("To json")
+    # js=df.to_json(orient='records')
+    # logging.debug(js)
+    # # resp={'message': "Processed"}
+    # return js
+    # # return jsonify(resp)
+    return df
 # movies
-
-def display(df):
-    # print(df.head())
-    print(df.info())
-    print(df.describe())    
-# display
-
-def search_name(search,max_rows):
-  logging.debug(f"search_name search: {search}")
-  # display(df_names)
-  df=df_names[df_names.primaryName.str.contains(search,na=False, case=False)]
-  df['display']=df.primaryName+' ('+df.birthYear+')'
-  # display(df)
-  print(df)
-  logging.debug(f"search_name df")
-  return df.head(max_rows)
-# search_name
-
-def find_nconst():
-    df_title_basics = pd.read_csv(open(file,"rb"))
-    use = df_title_basics[df_title_basics.runtimeMinutes.notnull()]
-    use["runtimeMinutes"] = use.runtimeMinutes.astype(int)
-    print(use[use.runtimeMinutes>50000])
-# Find nconst
 
 def find_titles(genre,nconst1,nconst2,rating,title,votes,year_end,year_start):
     # Starting point cases
@@ -176,7 +188,7 @@ def find_titles(genre,nconst1,nconst2,rating,title,votes,year_end,year_start):
     # - No movie for name2
     # - Movie(s) for name1 and name2
     
-    logging.debug(f"find_titles: g:{genre} n1:{nconst1} n2:{nconst2} r:{rating} t:{title} v:{votes} ys:{year_start} ye:{year_end}")
+    logging.debug(f"find_titles: g:{genre} c1:{nconst1} c2:{nconst2} r:{rating} t:{title} v:{votes} ys:{year_start} ye:{year_end}")
     filtered=""
     df=df_ratings_titles
     logging.debug(f"find_titles - titles         : {df.shape}")
@@ -192,15 +204,8 @@ def find_titles(genre,nconst1,nconst2,rating,title,votes,year_end,year_start):
         l2=df2['tconst'].unique().tolist()
         df=df[df.tconst.isin(l2)]
         logging.debug(f"find_titles - titles     n2={nconst2}  : {df.shape}")
-    logging.debug(f"find_titles - titles         : {df.shape}")
+    logging.debug(f"find_titles - titles                   : {df.shape}")
     
-    # numVotes
-    # titleType
-    # primaryTitle
-    # originalTitle
-    # startYear
-    # runtimeMinutes
-    # genres
     if genre!="":
         logging.debug(f"find_titles filter genre: {genre}")
         filtered+=" g:"+genre
@@ -229,7 +234,6 @@ def find_titles(genre,nconst1,nconst2,rating,title,votes,year_end,year_start):
     print(f"Filterd: {filtered}")
 
     print("Movies")
-    display(df)
     print(df)
     
     # Casts
@@ -250,7 +254,7 @@ def find_titles(genre,nconst1,nconst2,rating,title,votes,year_end,year_start):
     print("Movies Casts_names - joined:")
     print(df_movies_casts_names)
     
-    return df_movies_casts_names.head(30)
+    return df_movies_casts_names.head(max_rows)
 # Find titles
 
 def init():
@@ -260,8 +264,8 @@ def init():
     principals()
     ratings_titles()
     global params
-    params=f"init(): Names: {df_names.size} Principals: {df_principals} Titles: {df_ratings_titles}"
-    logging.info(params)
+    # params=f"init(): Names: {df_names.size} Principals: {df_principals} Titles: {df_ratings_titles}"
+    # logging.info(params)
 # init
 
 def list_genres():
@@ -278,12 +282,6 @@ def list_genres():
       # print(genres)
     return l
 # list_genres
-
-def list_names():
-    print("list_names:")
-    display(df_names)
-    # print(df_names.to_json(orient='table'))
-# list_names
 
 def names():
     global df_names
@@ -306,19 +304,40 @@ def ratings_titles():
     df_ratings_titles = pd.read_csv(file)
     # display(df_ratings_titles)
 # ratings_titles
-
-init()
     
+def set_sheet(data,ws):
+
+    c=1
+    r=1
+      
+    # Headers
+    ws[get_column_letter(c)+str(r)]='Movie Title'
+    ws[get_column_letter(c+1)+str(r)]='Year'
+    ws[get_column_letter(c+2)+str(r)]='Director'
+    ws[get_column_letter(c+3)+str(r)]='Rating'
+      
+    ws.column_dimensions['A'].width = 40
+    ws.column_dimensions['B'].width = 15
+    ws.column_dimensions['C'].width = 40
+    ws.column_dimensions['D'].width = 15
+      
+    # Data
+    logging.debug("set_sheet - data")
+    logging.debug(data)
+    for row in data:
+      logging.debug("set_sheet - row")
+      logging.debug(row)
+      r+=1
+      ws[get_column_letter(c)+str(r)]=row['originalTitle']
+      ws[get_column_letter(c+1)+str(r)]=row['startYear']
+      ws[get_column_letter(c+2)+str(r)]=row['primaryName']
+      ws[get_column_letter(c+3)+str(r)]=row['averageRating']
+        
+# set_sheet
+
 if __name__ == '__main__':
 
-    # l=list_genres()
-    # with open("genres.txt", "w") as f:
-    #   for g in l:
-    #     f.write("   { value: \""+g+"\" }, "+"\n")
-    # print(l)
-
-    # List the available names
-    # list_names()
+    init()
     
     # Find Titles
     genre=""
@@ -335,7 +354,7 @@ if __name__ == '__main__':
     # Find name
     # search="Marie-Josée Croze"
     # search="Marie"
-    # df = find_name(search,10)
+    # df = find_names(search,10)
     # df.to_csv("find_name.csv")
     
     # To open port:
@@ -343,4 +362,4 @@ if __name__ == '__main__':
     # Go to Windows Defender Firewall
     # > Advanced Settings > Inbound rules
     # > New Rule > Port > Next
-    app.run(debug=True,host='0.0.0.0', port=5102)
+    app.run(debug=True,host='0.0.0.0',port=5004)

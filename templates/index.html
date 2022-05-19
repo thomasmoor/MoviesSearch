@@ -1,0 +1,158 @@
+<html>
+<head>
+<link href="//code.jquery.com/ui/1.10.2/themes/smoothness/jquery-ui.css" rel="Stylesheet"></link>
+<script src="//code.jquery.com/jquery-2.2.0.min.js"></script>
+<script src="//code.jquery.com/ui/1.10.2/jquery-ui.js" ></script>
+<script type="text/javascript">
+
+$(document).ready(function() {
+
+jQuery.fn.filterByText = function(textbox) {
+    return this.each(function() {
+        var select = $(this);
+        var options = [],
+            defaultOption = '';
+
+        select.find('option').each(function() {
+            var elm = $(this);
+            if(elm.data('default') != true)
+            {
+                options.push({value: elm.val(), text: elm.text()});
+            }
+            else
+            {
+                defaultOption = elm.text();
+            }
+        });
+
+        $(textbox).bind('change keyup', function() {
+            select.empty();
+            var search = $.trim($(this).val());
+            var regex = new RegExp(search,"gi");
+
+            if(search.length < 3)
+            {
+                select.append($('<option>').text(defaultOption).prop('selected', true));
+				return;
+            }
+			
+			console.log("find_names - search:"+search)
+            $.getJSON("{{url_for('find_names')}}",{
+              q: search, // "q" is the argument to look for using request.args in Flask
+            }, function(data) {
+              console.log("findNames - response:")
+              console.log(data)
+			  $.each(data, function(i) {
+			    option=data[i]
+				// console.log(option)
+                select.append(
+                  $('<option>').text(option.display).val(option.nconst)
+                );
+			  });
+            });			
+        });
+    });
+};
+   $(function() {
+      $('#name').filterByText($('#sort'), true);
+      $('#name2').filterByText($('#sort2'), true);
+    });
+
+});
+
+</script>
+</head>
+<body>
+  <!-- Parameters form -->
+  <form action="" method="post">
+    <div>
+      <label>Genre</label>
+      <select id="genre" name="genre">
+        <option value="" data-default="true">Select...</option>
+	    <option value="Adventure">Adventure</option>
+	    <option value="Adventure">Adventure</option>
+        <option value="Drama">Drama</option>
+        <option value="Fantasy">Fantasy</option>
+        <option value="Crime">Crime</option>
+        <option value="Mystery">Mystery</option>
+        <option value="Horror">Horror</option>
+        <option value="History">History</option>
+        <option value="Action">Action</option>
+        <option value="Comedy">Comedy</option>
+        <option value="War">War</option>
+        <option value="Romance">Romance</option>
+        <option value="Biography">Biography</option>
+        <option value="Sci-Fi">Sci-Fi</option>
+        <option value="Family">Family</option>
+        <option value="Thriller">Thriller</option>
+        <option value="Western">Western</option>
+        <option value="Sport">Sport</option>
+        <option value="Documentary">Documentary</option>
+        <option value="Animation">Animation</option>
+        <option value="Musical">Musical</option>
+        <option value="Music">Music</option>
+        <option value="Film-Noir">Film-Noir</option>
+        <option value="News">News</option>
+        <option value="Adult">Adult</option>
+        <option value="Reality-TV">Reality-TV</option>
+      </select>
+    </div>
+	<div>
+      <label>Member of the Cast</label>
+	  <input type="text" id="sort" class="sort"/><br/>
+      <select name="name" id="name">
+        <option value="" data-default="true">Name...</option>
+	  </select>
+	</div>
+	<div>
+      <label>Other Member of the Cast</label>
+	  <input type="text" id="sort2" class="sort"/><br/>
+      <select name="name2" id="name2">
+        <option value="" data-default="true">Name...</option>
+	  </select>
+	</div>
+	<div>
+      <label>Minimal Movie Rating</label>
+      <input name="rating" type="text" id="rating"/>
+    </div>
+    <div>
+      <label>Minimum Number of Votes</label>
+      <input name="votes" type="text" id="votes"/>
+    </div>
+    <div>
+      <label>From Year</label>
+      <input name="yearStart" type="text" id="yearStart"/>
+    </div>
+    <div>
+      <label>To Year</label>
+      <input name="yearEnd" type="text" id="yearEnd"/>
+    </div>
+    <div>
+	  <!-- Submit button -->
+      <p><input type="submit" name="extract" value="Find Movies"/></p>
+	  <!-- Download Button -->
+      <p><input type="submit" name="download" value="Download"/></p>
+    </div>
+	
+	<!-- Results -->
+	<h2>Movies</h2>
+    <table border="1">
+      <tr>
+        <th>Movie Title</th>
+        <th>Year</th>
+        <th>Director</th>
+        <th>Rating</th>
+      </tr>
+      {% for row in results %}
+      <tr>
+        <td>{{ row.originalTitle }}</td>
+        <td>{{ row.startYear }}</td>
+        <td>{{ row.primaryName }}</td>
+        <td>{{ row.averageRating }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+	
+  </form>
+</body>
+</html>
